@@ -2,7 +2,7 @@
 
 *Currently only works with Blender 2.8, but once I am done with the shader import rewrites and actually upgrade to 2.9, I will fix the incompatibility.*
 
-A more advanced Blender add-on to import NinjaRipper RIP files into Blender. More options than previous iterations, including the ability to parse shader files. Based on the add-on by Dummiesman and later xpawelsky, but rewritten to the point that I don't think further credit is needed.
+A more advanced Blender add-on to import NinjaRipper RIP files into Blender. More options than previous iterations, including the ability to parse shader files. Based on the add-on by [Dummiesman](https://github.com/Dummiesman/RipImport) and later [xpawelsky](https://github.com/xpawelsky/RipImport), but rewritten to the point that I don't think further credit is needed.
 
 ## Import Options
 * **Vertex Order:** How to translate the RIP file vertex coordinates X,Y,Z into Blender X,Y,Z. The default (-X, Z, Y) should be the only one you need, but other options exist for experiment's sake.
