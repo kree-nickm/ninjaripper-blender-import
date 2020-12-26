@@ -2,7 +2,7 @@ import os
 import time
 import struct
 from functools import reduce
-from RipShader import RipShader
+from .RipShader import RipShader
 
 class RipFile:
    typeLookup = ["FLOAT", "UINT", "SINT"]
