@@ -1,5 +1,7 @@
 # NinjaRipper Blender Import
 
+*Currently only works with Blender 2.8, but once I am done with the shader import rewrites and actually upgrade to 2.9, I will fix the incompatibility.*
+
 A more advanced Blender add-on to import NinjaRipper RIP files into Blender. More options than previous iterations, including the ability to parse shader files. Based on the add-on by Dummiesman and later xpawelsky, but rewritten to the point that I don't think further credit is needed.
 
 ## Import Options
