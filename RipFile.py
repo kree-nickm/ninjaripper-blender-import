@@ -2,7 +2,13 @@ import os
 import time
 import struct
 from functools import reduce
-from .RipShader import RipShader
+
+# Needed for stand-alone tests
+import importlib
+if importlib.find_loader("bpy") is not None:
+   from .RipShader import RipShader
+else:
+   from RipShader import RipShader
 
 class RipFile:
    typeLookup = ["FLOAT", "UINT", "SINT"]
@@ -214,3 +220,18 @@ class RipFile:
       else:
          print("You must parse() before outputData()")
       
+
+# Testing, IGNORE ME
+if __name__ == "__main__":
+   #filePath = "D:\\Libraries\\Downloads\\Blender\\NinjaRipped\\_NinjaRipper\\2020.12.03_18.01.12_bg3_dx11.exe_Shadowheart\\2020.12.03_18.37.48_bg3_dx11.exe\\Mesh_0402.rip" # shadowheart hair
+   #filePath = "D:\\Libraries\\Downloads\\Blender\\NinjaRipped\\_NinjaRipper\\2020.11.27_02.19.38_DarkSoulsIII.exe_FirekeeperEnding\\2020.11.27_02.25.04_DarkSoulsIII.exe\\Mesh_0307.rip" #ds3
+   filePath = "D:\\Libraries\\Downloads\\Blender\\NinjaRipped\\_NinjaRipper\\2020.12.07_09.57.28_bg3_dx11.exe_Laezel2\\Rips\\Mesh_0157.rip" #laezel ears
+   rip = RipFile(filePath)
+   rip.parse()
+   print(rip)
+   from pprint import pprint
+   for shader in rip.shaders:
+      if shader.shaderType == 1:
+         shader.parse()
+         print(shader)
+         pprint(shader.registers)
