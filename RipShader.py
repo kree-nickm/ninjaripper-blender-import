@@ -2,12 +2,18 @@ import os
 import re
 import struct
 from math import floor
+from functools import reduce
+
+def float_to_hex(f):
+   if type(f) is float:
+      return hex(struct.unpack('<I', struct.pack('<f', f))[0])
+   else:
+      return None
 
 class RipShader:
    cbRegEx = re.compile("//\s+([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+);\s*//\s+Offset:\s+(\d+)\s+Size:\s+(\d+)")
    rRegEx = re.compile("//\s+([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s+(\d+)\s+(\d+)")
    ioRegEx = re.compile("//\s+([a-zA-Z0-9_]+)\s+(\d+)\s+([xyzw]+)\s+(\d+)\s+([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)\s+([xyzw]+)")
-   dclxRegEx = re.compile("^x(\d+)\[(\d+)\] (\d+)")
    
    def __init__(self, fileDir, fileName, textures):
       self.fileDir = fileDir
@@ -150,14 +156,18 @@ class RipShader:
       words = self.parseASM(line)
       if words[0] == "ret":
          return False
+         
       elif words[0].startswith("vs_") or words[0].startswith("ps_"):
          self.shaderVersion = words[0]
+         
       elif words[0] == "dcl_sampler":
          pass
          # Don't know what to do with these, probably nothing
          # Different samplers require different handling, but there's no way to automatically detect what
+         
       elif words[0] == "dcl_globalFlags":
          self.globalFlags += words[1:]
+         
       elif words[0] == "dcl_constantbuffer":
          if words[2] == "immediateIndexed":
             parts = words[1].split("[")
@@ -174,19 +184,11 @@ class RipShader:
                print("Invalid constant buffer declaration {} (line {})".format(words[1], self.currentLine))
          else:
             print("Unsupported constant buffer access pattern {} (line {})".format(words[2], self.currentLine))
+            
       elif words[0] == "dcl_resource_texture2d":
-         texnode = RipNode(self, "TexImage")
-         sepnode = RipNode(self, "SeparateRGB")
-         texnode.options['imageData'] = self.data['resources'][words[2]]['data']
-         texnode.options['name'] = self.data['resources'][words[2]]['name']
-         texnode.options['label'] = self.data['resources'][words[2]]['name']
-         texnode.output(0, sepnode.input())
-         if words[2] not in self.registers:
-            self.registers[words[2]] = {}
-         self.registers[words[2]]['x'] = sepnode.output(0)
-         self.registers[words[2]]['y'] = sepnode.output(1)
-         self.registers[words[2]]['z'] = sepnode.output(2)
-         self.registers[words[2]]['w'] = texnode.output(1)
+         pass
+         # Deal with these during sample_indexable
+         
       elif words[0] == "dcl_input" or words[0] == "dcl_input_ps":
          if words[0] == "dcl_input":
             parts = words[1].split(".")
@@ -201,6 +203,7 @@ class RipShader:
          else:
             node = RipNode(self, "Value")
             self.registers[parts[0]] = node.output()
+            
       elif words[0] == "dcl_output":
          parts = words[1].split(".")
          if len(parts) > 1:
@@ -210,48 +213,241 @@ class RipShader:
                self.registers[parts[0]][c] = None
          else:
             self.registers[parts[0]] = None
+            
       elif words[0] == "dcl_temps":
          for i in range(int(words[1])):
             self.registers['r'+str(i)] = {'x':None, 'y':None, 'z':None, 'w':None}
+            
+      elif words[0] == "dcl_indexableTemp":
+         parts = words[1].split("[")
+         if len(parts) > 1 and len(words) == 3:
+            parts[1] = parts[1][:-1]
+            self.registers[parts[0]] = []
+            for i in range(int(parts[1])):
+               self.registers[parts[0]].append({})
+               for c in range(int(words[2])):
+                  self.registers[parts[0]][i]["xyzw"[c]] = None
+         else:
+            print("Invalid indexableTemp declaration {} (line {})".format(words, self.currentLine))
+      
       elif words[0] == "if" or  words[0] == "if_nz" or  words[0] == "if_z":
          print("if statements currently unsupported (line {})".format(self.currentLine))
          self.ignoring = True
       elif words[0] == "endif":
          self.ignoring = False
+      
       else:
          words[0] = self.parseASMInstruction(words[0])
          words[1] = self.parseASMDest(words[1])
          for i in range(2, len(words)):
             words[i] = self.parseASMSrc(words[i])
-         #print(words)
+            
          if words[0][0] == "sample_indexable":
-            #TODO: Check for negative modifiers
+            texnode = RipNode(self, "TexImage")
+            sepnode = RipNode(self, "SeparateRGB")
+            texnode.options['imageData'] = self.data['resources'][words[3][0][1]]['data']
+            texnode.options['name'] = self.data['resources'][words[3][0][1]]['name']
+            texnode.options['label'] = self.data['resources'][words[3][0][1]]['name']
+            texnode.output(0, sepnode.input())
+            if words[3][0][1] not in self.registers:
+               self.registers[words[3][0][1]] = {}
+            self.registers[words[3][0][1]]['x'] = sepnode.output(0)
+            self.registers[words[3][0][1]]['y'] = sepnode.output(1)
+            self.registers[words[3][0][1]]['z'] = sepnode.output(2)
+            self.registers[words[3][0][1]]['w'] = texnode.output(1)
             uvnode = RipNode(self, "CombineXYZ")
-            uvnode.input(0, self.registers[words[2][0][1]][words[2][0][2]])
-            uvnode.input(1, self.registers[words[2][1][1]][words[2][1][2]])
+            uvnode.input(0, self.getOutputFromSrcTerm(words[2][0]))
+            uvnode.input(1, self.getOutputFromSrcTerm(words[2][1]))
             texnode = self.registers[words[3][0][1]]['w'].node
             texnode.input(0, uvnode.output())
             texnode.options['sampler'] = self.data['resources'][words[4][0][1]]
-            for c in words[1][1]:
-               self.registers[words[1][0]]["xyzw"[c]] = self.registers[words[3][c][1]][words[3][c][2]]
-         elif words[0][0] in RipNode.basicMaths:
-            '''outputs = []
-            for t in terms[0]:
-               outputs.append(None)
-            for r in regs['indexes']:
-               if len(regs['indexes']) == 1:
-                  s = 0
-               else:
-                  s = r
-               loc = get_shader_location(data['nodeCount'])
-               node = create_asm_node("Math", [loc[0]+10*s, loc[1]], [term[s] for term in terms], op, sat)
-               data['nodeCount'] = data['nodeCount'] + 1
-               outputs[s] = node.outputs[0]
-            apply_asm_mask(regs, outputs)'''
+            self.setRegister(words[1], [self.getRegisterFromTuple(word) for word in words[3]])
             
-            node = RipNode(self, "Math")
-            node.options = RipNode.basicMaths[words[0][0]]
-            node.options['use_clamp'] = (words[0][1] & 1 == 1)
+         elif words[0][0] in RipNode.basicMaths:
+            # prepare for an output for each possible input component
+            outputs = [None] * reduce(lambda a,b: max(len(b), a), words[2:], 0)
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               node = RipNode(self, "Math")
+               node.options = RipNode.basicMaths[words[0][0]]
+               node.options['use_clamp'] = (words[0][1] & 1 == 1)
+               for i in range(2,len(words)):
+                  if len(words[i]) != len(outputs):
+                     print("DEBUG: term length mismatch, double-check that selecting the first one is ok (line {})".format(self.currentLine))
+                  node.input(i, self.getOutputFromSrcTerm(words[i][cReal]))
+               outputs[cReal] = node.output()
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "exp":
+            # prepare for an output for each possible input component
+            outputs = [None] * len(words[2])
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               node = RipNode(self, "Math")
+               node.options['operation'] = "POWER"
+               node.options['use_clamp'] = (words[0][1] & 1 == 1)
+               node.input(0, 2.0)
+               node.input(1, self.getOutputFromSrcTerm(words[2][cReal]))
+               outputs[cReal] = node.output()
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "log":
+            # prepare for an output for each possible input component
+            outputs = [None] * len(words[2])
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               node = RipNode(self, "Math")
+               node.options['operation'] = "LOGARITHM"
+               node.options['use_clamp'] = (words[0][1] & 1 == 1)
+               node.input(0, self.getOutputFromSrcTerm(words[2][cReal]))
+               node.input(1, 2.0)
+               outputs[cReal] = node.output()
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "ge":
+            # prepare for an output for each possible input component
+            outputs = [None] * max(len(words[2]), len(words[3]))
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               node = RipNode(self, "Math")
+               node.options['operation'] = "LESS_THAN"
+               node.options['use_clamp'] = (words[0][1] & 1 == 1)
+               node.input(0, self.getOutputFromSrcTerm(words[3][cReal]))
+               node.input(1, self.getOutputFromSrcTerm(words[2][cReal]))
+               outputs[cReal] = node.output()
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "and":
+            # prepare for an output for each possible input component
+            outputs = [None] * max(len(words[2]), len(words[3]))
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               if float_to_hex(words[3][cReal]) == "0x3f800000":
+                  node = RipNode(self, "Math")
+                  node.options['operation'] = "ADD"
+                  node.options['use_clamp'] = (words[0][1] & 1 == 1)
+                  node.input(0, self.getOutputFromSrcTerm(words[2][cReal]))
+                  node.input(1, 0.0)
+                  outputs[cReal] = node.output()
+               else:
+                  print("unsupported command 'and' only works with specific inputs (line {})".format(self.currentLine))
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "dp2" or words[0][0] == "dp3" or words[0][0] == "dp4":
+            dimensions = int(words[0][0][2])
+            nodes = []
+            for i in range(dimensions):
+               node = RipNode(self, "Math")
+               node.options['operation'] = "MULTIPLY"
+               node.input(0, self.getOutputFromSrcTerm(words[2][i]))
+               node.input(1, self.getOutputFromSrcTerm(words[3][i]))
+               nodes.append(node)
+            for a in range(dimensions-1):
+               node = RipNode(self, "Math")
+               node.options['operation'] = "ADD"
+               node.input(0, nodes[a].output() if a == 0 else nodes[dimensions-1+a].output())
+               node.input(1, nodes[a+1].output())
+               nodes.append(node)
+            nodes[len(nodes)-1].options['use_clamp'] = (words[0][1] & 1 == 1)
+            self.setRegister(words[1], [nodes[len(nodes)-1].output()])
+            
+         elif words[0][0] == "mov" or words[0][0] == "utof":
+            # prepare for an output for each possible input component
+            outputs = [None] * len(words[2])
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               node = RipNode(self, "Math")
+               node.options['operation'] = "ADD"
+               node.options['use_clamp'] = (words[0][1] & 1 == 1)
+               node.input(0, self.getOutputFromSrcTerm(words[2][cReal]))
+               node.input(1, 0.0)
+               outputs[cReal] = node.output()
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "movc":
+            # prepare for an output for each possible input component
+            outputs = [None] * max(len(words[2]), len(words[3]), len(words[4]))
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               compnode = RipNode(self, "Math")
+               compnode.options['operation'] = "COMPARE"
+               compnode.input(0, self.getOutputFromSrcTerm(words[2][cReal]))
+               compnode.input(1, 0.0)
+               compnode.input(2, 0.0)
+               nonode = RipNode(self, "Math")
+               nonode.options['operation'] = "MULTIPLY"
+               nonode.input(0, self.getOutputFromSrcTerm(words[4][cReal]))
+               nonode.input(1, compnode.output())
+               negnode = RipNode(self, "Math")
+               negnode.options['operation'] = "SUBTRACT"
+               negnode.input(0, 1.0)
+               negnode.input(1, compnode.output())
+               yesnode = RipNode(self, "Math")
+               yesnode.options['operation'] = "MULTIPLY"
+               yesnode.input(0, self.getOutputFromSrcTerm(words[3][cReal]))
+               yesnode.input(1, negnode.output())
+               finalnode = RipNode(self, "Math")
+               finalnode.options['operation'] = "ADD"
+               finalnode.options['use_clamp'] = (words[0][1] & 1 == 1)
+               finalnode.input(0, yesnode.output())
+               finalnode.input(1, nonode.output())
+               outputs[cReal] = finalnode.output()
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "bfi":
+            # prepare for an output for each possible input component
+            outputs = [None] * max(len(words[2]), len(words[3]), len(words[4]), len(words[5]))
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               if words[2][cReal] != 28:
+                  print("bfi assumes 28 is first term, but {} given instead. Using 28 anyway... (line {})".format(words[2][cReal], self.currentLine))
+               if type(words[3][cReal]) is not float:
+                  print("bfi currently only supports constants as second term, {} given, result will be incorrect (line {})".format(words[3][cReal], self.currentLine))
+                  words[3][cReal] = 0
+               node = RipNode(self, "Math")
+               node.options['operation'] = "MULTIPLY_ADD"
+               node.options['use_clamp'] = (words[0][1] & 1 == 1)
+               node.input(0, self.getOutputFromSrcTerm(words[4][cReal]))
+               node.input(1, 2**words[3][cReal])
+               node.input(2, self.getOutputFromSrcTerm(words[5][cReal]))
+               outputs[cReal] = node.output()
+            self.setRegister(words[1], outputs)
+            
+         elif words[0][0] == "ne":
+            # prepare for an output for each possible input component
+            outputs = [None] * max(len(words[2]), len(words[3]))
+            components = words[1][1] if words[1][1] is not None and len(words[1][1]) > 0 else []
+            for cMask in components:
+               # if there's only one output, we don't mask the inputs, we just pick the first one
+               cReal = 0 if len(components) == 1 else cMask
+               node1 = RipNode(self, "Math")
+               node1.options['operation'] = "COMPARE"
+               node1.input(0, self.getOutputFromSrcTerm(words[2][cReal]))
+               node1.input(1, self.getOutputFromSrcTerm(words[3][cReal]))
+               node1.input(1, 0.0)
+               node2 = RipNode(self, "Math")
+               node2.options['operation'] = "SUBTRACT"
+               node2.input(0, 1.0)
+               node2.input(1, node1.output())
+               outputs[cReal] = node2.output()
+            self.setRegister(words[1], outputs)
+            
          else:
             print("Unhandled ASM instruction \"{}\" (line {})".format(words[0], self.currentLine))
       return True
@@ -358,6 +554,7 @@ class RipShader:
          dest = termParts[0]
       if len(termParts) > 1:
          mask = []
+         # Masks should always be in order, so we only need to check if a component exists.
          if termParts[1].find("x") > -1:
             mask.append(0)
          if termParts[1].find("y") > -1:
@@ -422,11 +619,12 @@ class RipShader:
          term = term[1:-1]
       termParts = term.split(".")
       srcParts = termParts[0].split("[")
+      if len(srcParts) > 1:
+         srcParts[1] = srcParts[1][:-1]
       if len(termParts) > 1:
          result = []
          for n in termParts[1]:
             if len(srcParts) > 1:
-               srcParts[1] = srcParts[1][:-1]
                result.append((mod, srcParts, n))
             else:
                result.append((mod, termParts[0], n))
@@ -436,351 +634,66 @@ class RipShader:
       else:
          return [(mod, termParts[0], None)]
    
-   # Takes output from the above function and returns a list of the associated stored node outputs, ignoring modifier for now
-   def parsed_swizzle_to_outputs(swizzle):
-      result = []
-      for term in swizzle:
-         result.append(data[term[1]][term[2]])
-      return result
-   
-   # Updates the data dict with the lastest outputs in the chain (src)
-   def apply_asm_mask(regs, src):
-      if type(regs['reg']) is list:
-         target = data[regs['reg'][0]][regs['reg'][1]]
-      else:
-         target = data[regs['reg']]
-      if not target:
-         print("Data target is None in apply_asm_mask({}, {}) (line {})".format(regs, src, self.currentLine))
-         return
-      if len(regs['indexes']) > 1:
-         for r in regs['indexes']:
-            if regs['reg'].startswith("o"):
-               if type(src[r]) is float:
-                  target['xyzw'[r]].default_value = src[r]
-               elif src[r] is None:
-                  print("src[{}] is none in apply_asm_mask({}, {}) (line {})".format(r, regs, src, self.currentLine))
-               else:
-                  mtl.node_tree.links.new(target['xyzw'[r]], src[r])
-            else:
-               target['xyzw'[r]] = src[r]
-      elif len(regs['indexes']) == 1:
-         if regs['reg'].startswith("o"):
-            if type(src[0]) is float:
-               target['xyzw'[regs['indexes'][0]]].default_value = src[0]
-            elif src[0] is None:
-               print("src[0] is none in apply_asm_mask({}, {}) (line {})".format(regs, src, self.currentLine))
-            else:
-               mtl.node_tree.links.new(target['xyzw'[regs['indexes'][0]]], src[0])
-         else:
-            target['xyzw'[regs['indexes'][0]]] = src[0]
-      else:
-         if regs['reg'].startswith("o"):
-            if type(src[0]) is float:
-               target.default_value = src[0]
-            elif src[0] is None:
-               print("src[0] is none in apply_asm_mask({}, {}) (line {})".format(regs, src, self.currentLine))
-            else:
-               mtl.node_tree.links.new(target, src[0])
-         else:
-            print("Dest has no components in apply_asm_mask({}, {}) (line {})".format(regs, src, self.currentLine))
-         
-   
-   def asm_dcl_indexableTemp_custom(words):
-      xid, size, parts = self.dclxRegEx.search(words[1]).group(1,2,3)
-      data['x'+xid] = []
-      for i in range(int(size)):
-         data['x'+xid].append({})
-         for p in range(int(parts)):
-            data['x'+xid][i]["xyzw"[p]] = None
-
-   # regs: {'reg':"r1", 'indexes':[2,3]} <- represents r1.zw
-   # terms: a list of lists of asm inputs, which are each a list of up to 4 elements, which are the pieces of that input. Might be floats, or tuples of (mod,source,sourceletter)
-   
-   def asm_ge(regs, terms, sat=False):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      for r in regs['indexes']:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         loc = get_shader_location(data['nodeCount'])
-         node = create_asm_node("Math", [loc[0]+10*s, loc[1]], [terms[1][s], terms[0][s]], "LESS_THAN", sat)
-         data['nodeCount'] += 1
-         outputs[s] = node.outputs[0]
-      apply_asm_mask(regs, outputs)
-   
-   def asm_and(regs, terms, sat=False):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      for r in regs['indexes']:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         try:
-            if float_to_hex(terms[0][s]) == "0x3f800000" or float_to_hex(terms[1][s]) == "0x3f800000":
-               loc = get_shader_location(data['nodeCount'])
-               node = create_asm_node("Math", [loc[0]+10*s, loc[1]], [terms[0][s], 1], "MULTIPLY", True)
-               data['nodeCount'] += 1
-               outputs[s] = node.outputs[0]
-            else:
-               print("unsupported command 'and' only works with specific inputs (line {})".format(self.currentLine))
-         except IndexError:
-            print("IndexError in asm_and({}, {}, {}) (line {})".format(regs, terms, sat, self.currentLine))
-      apply_asm_mask(regs, outputs)
-   
-   def asm_BASICOP(regs, terms, sat=False, op="ADD"):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      for r in regs['indexes']:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         loc = get_shader_location(data['nodeCount'])
-         node = create_asm_node("Math", [loc[0]+10*s, loc[1]], [term[s] for term in terms], op, sat)
-         data['nodeCount'] += 1
-         outputs[s] = node.outputs[0]
-      apply_asm_mask(regs, outputs)
-   
-   def asm_exp_sat(regs, terms):
-      asm_exp(regs, terms, True)
+   def getRegisterFromTuple(self, term):
+      """Gets the register referred to by the given tuple parsed by parseASMSwizzle
       
-   def asm_exp(regs, terms, sat=False):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      for r in regs['indexes']:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         loc = get_shader_location(data['nodeCount'])
-         node = create_asm_node("Math", [loc[0]+10*s, loc[1]], [2, terms[0][s]], "POWER", sat)
-         data['nodeCount'] += 1
-         outputs[s] = node.outputs[0]
-      apply_asm_mask(regs, outputs)
-
-   def asm_log_sat(regs, terms):
-      asm_log(regs, terms, True)
+      Parameters
+      ----------
+      term : tuple
+         a 3-element tuple from parseASMSwizzle
       
-   def asm_log(regs, terms, sat=False):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      for r in regs['indexes']:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         loc = get_shader_location(data['nodeCount'])
-         node = create_asm_node("Math", [loc[0]+10*s, loc[1]], [terms[0][s], 2], "LOGARITHM", sat)
-         data['nodeCount'] += 1
-         outputs[s] = node.outputs[0]
-      apply_asm_mask(regs, outputs)
-
-   def asm_dpX(regs, terms, sat=False, num=3):
-      outputs = []
-      nodes = []
-      for c in range(num):
-         nodes.append(create_asm_node("Math", get_shader_location(data['nodeCount']), [terms[0][c], terms[1][c]], "MULTIPLY", False))
-         data['nodeCount'] += 1
-      for a in range(num-1):
-         nodes.append(create_asm_node("Math", [nodes[a].location[0]+150, nodes[a].location[1]], [
-            nodes[a].outputs[0] if a == 0 else nodes[num-1+a].outputs[0],
-            nodes[a+1].outputs[0]
-         ], "ADD", False))
-      nodes[len(nodes)-1].use_clamp = sat
-      outputs.append(nodes[len(nodes)-1].outputs[0])
-      apply_asm_mask(regs, outputs)
-
-   def asm_dp2_sat(regs, terms):
-      asm_dpX(regs, terms, True, 2)
-
-   def asm_dp2(regs, terms):
-      asm_dpX(regs, terms, False, 2)
-
-   def asm_dp3_sat(regs, terms):
-      asm_dpX(regs, terms, True, 3)
-
-   def asm_dp3(regs, terms):
-      asm_dpX(regs, terms, False, 3)
-
-   def asm_dp4_sat(regs, terms):
-      asm_dpX(regs, terms, True, 4)
-
-   def asm_dp4(regs, terms):
-      asm_dpX(regs, terms, False, 4)
+      Returns
+      -------
+      RipNodeOutput
+         the element of self.registers
+      """
       
-   def asm_mov_sat(regs, terms):
-      asm_mov(regs, terms, True)
-
-   def asm_mov(regs, terms, sat=False):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      for r in regs['indexes']:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         loc = get_shader_location(data['nodeCount'])
-         node = create_asm_node("Math", [loc[0]+10*s, loc[1]], [terms[0][s], 0], "ADD", sat)
-         data['nodeCount'] += 1
-         outputs[s] = node.outputs[0]
-      apply_asm_mask(regs, outputs)
-      
-   def asm_movc_sat(regs, terms):
-      asm_movc(regs, terms, True)
-
-   def asm_movc(regs, terms, sat=False):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      temp = regs['indexes']
-      if len(temp) == 0:
-         temp = [0]
-      for r in temp:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         loc = get_shader_location(data['nodeCount'])
-         compnode = create_asm_node("Math", loc, [terms[0][s], 0, 0], "COMPARE", False)
-         nonode = create_asm_node("Math", [loc[0]+150, loc[1]-20], [terms[2][s], compnode.outputs[0]], "MULTIPLY", False)
-         negnode = create_asm_node("Math", [loc[0]+150, loc[1]+20], [1, compnode.outputs[0]], "SUBTRACT", False)
-         yesnode = create_asm_node("Math", [loc[0]+300, loc[1]+20], [terms[1][s], negnode.outputs[0]], "MULTIPLY", False)
-         finalnode = create_asm_node("Math", [loc[0]+300, loc[1]-20], [yesnode.outputs[0], nonode.outputs[0]], "ADD", sat)
-         data['nodeCount'] += 1
-         outputs[s] = finalnode.outputs[0]
-      apply_asm_mask(regs, outputs)
-      
-   def asm_bfi_sat(regs, terms):
-      asm_bfi(regs, terms, True)
-      
-   def asm_bfi(regs, terms, sat=False):
-      if len(terms) != 4:
-         print("Incorrect number of terms (requires 4): {}({}, {}, {}) (line {})".format("asm_bfi", regs, terms, sat, self.currentLine))
-         return
-      if len(terms[2]) > 1:
-         print("Invalid third term, requires one component: {}({}, {}, {}) (line {})".format("asm_bfi", regs, terms, sat, self.currentLine))
-         return
-      outputs = []
-      if terms[0][0] != 28 or terms[1][0] != 4:
-         print("asm_bfi assumes 28 and 4 are first two terms, but {} and {} given instead. Using 28 and 4 anyway... (line {})".format(terms[0][0], terms[1][0], self.currentLine))
-      node = create_asm_node("Math", get_shader_location(data['nodeCount']), [terms[2][0], 16, terms[3][0]], "MULTIPLY_ADD", sat)
-      data['nodeCount'] += 1
-      outputs.append(node.outputs[0])
-      apply_asm_mask(regs, outputs)
-
-   def asm_utof_sat(regs, terms):
-      asm_mov(regs, terms, True)
-      
-   def asm_utof(regs, terms, sat=False):
-      asm_mov(regs, terms, sat)
-
-   def asm_ne_sat(regs, terms):
-      asm_ne(regs, terms, True)
-      
-   def asm_ne(regs, terms, sat=False):
-      outputs = []
-      for t in terms[0]:
-         outputs.append(None)
-      for r in regs['indexes']:
-         if len(regs['indexes']) == 1:
-            s = 0
-         else:
-            s = r
-         loc = get_shader_location(data['nodeCount'])
-         node1 = create_asm_node("Math", [loc[0]+10*s, loc[1]], [terms[0][s], terms[1][s], 0], "COMPARE", False)
-         node2 = create_asm_node("Math", [loc[0]+150+10*s, loc[1]], [1, node1.outputs[0]], "SUBTRACT", sat)
-         data['nodeCount'] += 1
-         outputs[s] = node2.outputs[0]
-      apply_asm_mask(regs, outputs)
-
-   def create_asm_node(nodetype, loc, inputs, op=None, sat=None):
-      node = mtl.node_tree.nodes.new("ShaderNode"+nodetype)
-      node.hide = True
-      node.location = loc
-      if op:
-         node.operation = op
-      if sat:
-         node.use_clamp = sat
-      for i in range(len(inputs)):
-         if type(inputs[i]) is float or type(inputs[i]) is int:
-            node.inputs[i].default_value = inputs[i]
-         elif type(inputs[i]) is tuple:
-            connect_node(node.inputs[i], inputs[i])
-         elif isinstance(inputs[i], bpy.types.NodeSocket):
-            mtl.node_tree.links.new(node.inputs[i], inputs[i])
-         elif isinstance(inputs[i], bpy.types.ShaderNode):
-            mtl.node_tree.links.new(node.inputs[i], inputs[i].outputs[0])
-         else:
-            print("unable to create link to new node in create_asm_node({}, {}, {}, {}, {}) (line {})".format(nodetype, loc, inputs, op, sat))
-      return node
-
-   def connect_node(input, term):
-      if type(term) is tuple:
+      if(type(term) is tuple and len(term) == 3):
          if type(term[1]) is list:
-            src = data[term[1][0]][term[1][1]][term[2]]['output']
+            return self.registers[term[1][0]][term[1][1]][term[2]]
          else:
-            src = data[term[1]][term[2]]
-         if src:
-            if term[0] == "-":
-               prenode = create_asm_node("Math", [0,0], [src, -1], "MULTIPLY", False)
-               if input:
-                  prenode.location = [input.node.location[0]-150, input.node.location[1]]
-                  mtl.node_tree.links.new(input, prenode.outputs[0])
-                  return src
-               else:
-                  prenode.location = get_shader_location(data['nodeCount'])
-                  data['nodeCount'] += 1
-                  return prenode.outputs[0]
-            elif term[0] == "|":
-               prenode = create_asm_node("Math", [0,0], [src], "ABSOLUTE", False)
-               if input:
-                  prenode.location = [input.node.location[0]-150, input.node.location[1]]
-                  mtl.node_tree.links.new(input, prenode.outputs[0])
-                  return src
-               else:
-                  prenode.location = get_shader_location(data['nodeCount'])
-                  data['nodeCount'] += 1
-                  return prenode.outputs[0]
-            elif term[0] == "-|":
-               prenode1 = create_asm_node("Math", [0,0], [src], "ABSOLUTE", False)
-               prenode2 = create_asm_node("Math", [0,0], [src, -1], "MULTIPLY", False)
-               if input:
-                  prenode1.location = [input.node.location[0]-150, input.node.location[1]+20]
-                  prenode2.location = [input.node.location[0]-150, input.node.location[1]-20]
-                  mtl.node_tree.links.new(input, prenode2.outputs[0])
-                  return src
-               else:
-                  loc = get_shader_location(data['nodeCount'])
-                  prenode1.location = [loc[0]-150, loc[1]+20]
-                  prenode2.location = [loc[0]-150, loc[1]-20]
-                  data['nodeCount'] += 1
-                  return prenode2.outputs[0]
-            else:
-               if input:
-                  if type(src) is float:
-                     input.default_value = src
-                  else:
-                     mtl.node_tree.links.new(input, src)
-               return src
-         else:
-            print("tried to link to a nonexistent node (line {})".format(self.currentLine))
-            return None
+            return self.registers[term[1]][term[2]]
+      else:
+         raise TypeError("Argument of getRegisterFromTuple must be a 3-element tuple, {} given (line {})".format(term, self.currentLine))
+   
+   def getOutputFromSrcTerm(self, term):
+      if type(term) is tuple:
+         reg = self.getRegisterFromTuple(term)
+         if term[0] & 1 == 1:
+            negnode = RipNode(self, "Math")
+            negnode.options['operation'] = "MULTIPLY"
+            negnode.input(0, reg)
+            reg = negnode.output()
+         if term[0] & 2 == 2:
+            absnode = RipNode(self, "Math")
+            absnode.options['operation'] = "ABSOLUTE"
+            absnode.input(0, reg)
+            reg = absnode.output()
+         return reg
       elif type(term) is float:
-         if input:
-            input.default_value = term
          return term
       else:
-         print("unknown problem with connect_node({}, {}) (line {})".format(input, term, self.currentLine))
+         print("Invalid term '{}' (line {})".format(term, self.currentLine))
          return None
+   
+   def setRegister(self, dest, nodeOutputs):
+      if dest[1] is None:
+         if type(dest[0]) is list:
+            self.registers[dest[0][0]][dest[0][1]] = nodeOutputs[0]
+         else:
+            self.registers[dest[0]] = nodeOutputs[0]
+      else:
+         if type(dest[0]) is list:
+            target = self.registers[dest[0][0]][dest[0][1]]
+         else:
+            target = self.registers[dest[0]]
+         if len(dest[1]) > 1:
+            for r in dest[1]:
+               target['xyzw'[r]] = nodeOutputs[r]
+         elif len(dest[1]) == 1:
+            target['xyzw'[dest[1][0]]] = nodeOutputs[0]
+         else:
+            raise ValueError("Destination components somehow empty (line {})".format(self.currentLine))
    
    def __str__(self) -> str:
       result = []
@@ -827,7 +740,9 @@ class RipNode:
    def input(self, id=0, connect=None):
       if id not in self.inputs:
          self.inputs[id] = RipNodeInput(self, id)
-      if connect is not None:
+      if type(connect) is float or type(connect) is int:
+         self.inputs[id].defaultValue = float(connect)
+      elif connect is not None:
          self.inputs[id].connect(connect)
       return self.inputs[id]
    
@@ -870,6 +785,7 @@ class RipNodeInput:
       self.node = node
       self.id = id
       self.connection = None
+      self.defaultValue = 0.5
    
    def connect(self, output, oneWay=False):
       if isinstance(output, RipNodeOutput):
