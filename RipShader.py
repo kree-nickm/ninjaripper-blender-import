@@ -1,6 +1,7 @@
 import os
 import re
 import struct
+import time
 from math import floor
 from functools import reduce
 
@@ -32,6 +33,7 @@ class RipShader:
       self.globalFlags = []
    
    def parse(self):
+      loadStart = time.process_time()
       self.data = {
          'buffers': {
          },
@@ -151,6 +153,8 @@ class RipShader:
             else:
                self.handleASM(line)
       self.parsed = True
+      loadTime = time.process_time() - loadStart
+      print("{}: Shader parse took {}s".format(self.fileName, loadTime))
    
    def handleASM(self, line):
       words = self.parseASM(line)
@@ -197,6 +201,8 @@ class RipShader:
          if len(parts) > 1:
             for c in parts[1]:
                node = RipNode(self, "Value")
+               node.options['name'] = self.data['input'][parts[0]][c]['name']
+               node.options['label'] = self.data['input'][parts[0]][c]['name']
                if parts[0] not in self.registers:
                   self.registers[parts[0]] = {}
                self.registers[parts[0]][c] = node.output()
@@ -276,7 +282,7 @@ class RipShader:
                for i in range(2,len(words)):
                   if len(words[i]) != len(outputs):
                      print("DEBUG: term length mismatch, double-check that selecting the first one is ok (line {})".format(self.currentLine))
-                  node.input(i, self.getOutputFromSrcTerm(words[i][cReal]))
+                  node.input(i-2, self.getOutputFromSrcTerm(words[i][cReal]))
                outputs[cReal] = node.output()
             self.setRegister(words[1], outputs)
             
@@ -736,6 +742,22 @@ class RipNode:
       self.outputs = {}
       self.options = {}
       self.shader.nodes.append(self)
+      self.blenderNode = None
+      self.handled = False
+   
+   def traverse(self, prev=None):
+      if not self.handled:
+         for id in self.inputs:
+            print("Handling input #{} of {}".format(id, self))
+            if self.inputs[id].connection is not None:
+               if self.inputs[id].handled:
+                  print("ERROR: Infinite recursion detected!")
+               else:
+                  self.inputs[id].handled = True
+                  self.inputs[id].connection.node.traverse(self)
+            else:
+               print("Value: ".format(self.inputs[id].defaultValue))
+         self.handled = True
    
    def input(self, id=0, connect=None):
       if id not in self.inputs:
@@ -757,7 +779,7 @@ class RipNode:
       return str(self)
    
    def __str__(self):
-      return "<{} node created at line {}>".format(self.type, self.createdLine)
+      return "<{} node ({}) created at line {}>".format(self.type, self.options['operation'] if 'operation' in self.options else "", self.createdLine)
 
 class RipNodeOutput:
    def __init__(self, node, id):
@@ -786,6 +808,7 @@ class RipNodeInput:
       self.id = id
       self.connection = None
       self.defaultValue = 0.5
+      self.handled = False # for use by RipMesh
    
    def connect(self, output, oneWay=False):
       if isinstance(output, RipNodeOutput):

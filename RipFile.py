@@ -228,10 +228,8 @@ if __name__ == "__main__":
    filePath = "D:\\Libraries\\Downloads\\Blender\\NinjaRipped\\_NinjaRipper\\2020.12.07_09.57.28_bg3_dx11.exe_Laezel2\\Rips\\Mesh_0157.rip" #laezel ears
    rip = RipFile(filePath)
    rip.parse()
-   print(rip)
    from pprint import pprint
    for shader in rip.shaders:
       if shader.shaderType == 1:
          shader.parse()
-         print(shader)
-         pprint(shader.registers)
+         shader.registers['o1']['x'].node.traverse()
