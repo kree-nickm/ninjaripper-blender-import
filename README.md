@@ -1,8 +1,12 @@
 # NinjaRipper Blender Import
 
-*I have only tested this with Blender 2.8, so it might not work in 2.9. However, I did get a RIP file to import in my single 2.9 test case, so it *might* work.*
+***Important NOTE:*** This plugin was made for files that were exported with NinjaRipper 1.7.1. It will not work if you ripped your files with NinjaRipper 2. I will not be releasing any update to make this work with NinjaRipper 2 (if I ever update it again in the first place), because I don't use the program enough to justify buying it. However, someone has made a fork of this project that hopefully fixes the errors caused when you use NinjaRipper 2, which you can find [here](https://github.com/derivator/ninjaripper-blender-import). However, I can't make any promises that it will work either, because again, I do not use NinjaRipper 2 to test it and find out.
 
-A more advanced Blender add-on to import NinjaRipper RIP files into Blender. More options than previous iterations, including the ability to parse shader files. Based on the add-on by [Dummiesman](https://github.com/Dummiesman/RipImport) and later [xpawelsky](https://github.com/xpawelsky/RipImport), but rewritten to the point that I don't think further credit is needed.
+A more advanced Blender add-on to import NinjaRipper RIP files into Blender. More options than previous iterations, ~including the ability to parse shader files~. Based on the add-on by [Dummiesman](https://github.com/Dummiesman/RipImport) and later [xpawelsky](https://github.com/xpawelsky/RipImport), but rewritten to the point that I don't think further credit is needed.
+
+## Requirements:
+* Blender 2.8 (it might work with newer versions, but I haven't tested it or even used it since 2.8 was the latest version)
+* NinjaRipper 1.7.1 (will *not* work with NinjaRipper 2; see note above)
 
 ## Import Options
 * **Vertex Order:** How to translate the RIP file vertex coordinates X,Y,Z into Blender X,Y,Z. The default (-X, Z, Y) should be the only one you need, but other options exist for experiment's sake.
