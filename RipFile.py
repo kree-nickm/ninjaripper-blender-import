@@ -145,7 +145,7 @@ class RipFile:
       return True
    
    def __read(self, format, size):
-      return struct.unpack(format, self.file.read(size))
+      return struct.unpack('<' + format, self.file.read(size))
    
    def __readString(self) -> str:
       result = ""
